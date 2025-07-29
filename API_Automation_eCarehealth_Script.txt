@@ -1,0 +1,728 @@
+// tests/complete-healthcare-workflow.spec.js
+const { test, expect } = require('@playwright/test');
+const { faker } = require('@faker-js/faker');
+
+// Authentication Helper
+class AuthHelper {
+  static async login(request, credentials = {}) {
+    console.log('🔐 Starting authentication...');
+    
+    const loginData = {
+      username: credentials.username || process.env.TEST_USERNAME || 'rose.gomez1@jourrapide.com',
+      password: credentials.password || process.env.TEST_PASSWORD || 'Pass@123',
+      grant_type: 'password',
+      client_id: 'js-client'
+    };
+
+    console.log(`   Attempting login for user: ${loginData.username}`);
+
+    const response = await request.post('/auth/realms/stage_aithinkitive/protocol/openid-connect/token', {
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Accept': 'application/json'
+      },
+      form: loginData
+    });
+
+    if (response.status() !== 200) {
+      const errorBody = await response.text();
+      console.error(`❌ Authentication failed with status ${response.status()}: ${errorBody}`);
+      throw new Error(`Login failed with status ${response.status()}`);
+    }
+
+    const tokenResponse = await response.json();
+    console.log('✅ Authentication successful - token acquired');
+    return tokenResponse.access_token;
+  }
+}
+
+// Provider Data Factory
+class ProviderFactory {
+  static create() {
+    const firstName = faker.person.firstName();
+    const lastName = faker.person.lastName();
+    
+    return {
+      roleType: "PROVIDER",
+      active: true,
+      admin_access: true,
+      status: true,
+      avatar: "",
+      role: "PROVIDER",
+      firstName: firstName,
+      lastName: lastName,
+      gender: faker.helpers.arrayElement(["MALE", "FEMALE"]),
+      phone: faker.phone.number('###-###-####'),
+      npi: faker.string.numeric(10),
+      specialities: [faker.helpers.arrayElement([
+        "CARDIOLOGY", "DERMATOLOGY", "NEUROLOGY", "PEDIATRICS", "PSYCHIATRY"
+      ])],
+      groupNpiNumber: faker.string.numeric(10),
+      licensedStates: [faker.location.state({ abbreviated: true })],
+      licenseNumber: faker.string.alphanumeric(10).toUpperCase(),
+      acceptedInsurances: [faker.helpers.arrayElement([
+        "AETNA", "BLUE_CROSS", "CIGNA", "HUMANA", "UNITED_HEALTHCARE"
+      ])],
+      experience: faker.number.int({ min: 1, max: 30 }).toString(),
+      taxonomyNumber: faker.string.numeric(10),
+      workLocations: [faker.location.city()],
+      email: faker.internet.email({ firstName, lastName, provider: 'medarch.com' }),
+      officeFaxNumber: faker.phone.number('###-###-####'),
+      areaFocus: faker.lorem.sentence(3),
+      hospitalAffiliation: faker.company.name() + " Hospital",
+      ageGroupSeen: ["ADULT"],
+      spokenLanguages: ["ENGLISH"],
+      providerEmployment: "FULL_TIME",
+      insurance_verification: "YES",
+      prior_authorization: "YES",
+      secondOpinion: "YES",
+      careService: ["TELEHEALTH"],
+      bio: faker.lorem.paragraph(),
+      expertise: faker.lorem.sentence(),
+      workExperience: faker.lorem.paragraph(),
+      licenceInformation: [
+        {
+          uuid: faker.string.uuid(),
+          licenseState: faker.location.state({ abbreviated: true }),
+          licenseNumber: faker.string.alphanumeric(10).toUpperCase()
+        }
+      ],
+      deaInformation: [
+        {
+          deaState: faker.location.state({ abbreviated: true }),
+          deaNumber: faker.string.alphanumeric(9).toUpperCase(),
+          deaTermDate: faker.date.future().toISOString().split('T')[0],
+          deaActiveDate: faker.date.past().toISOString().split('T')[0]
+        }
+      ]
+    };
+  }
+}
+
+// Availability Factory
+class AvailabilityFactory {
+  static create(providerId) {
+    return {
+      setToWeekdays: false,
+      providerId: providerId,
+      bookingWindow: "7",
+      timezone: "EST",
+      bufferTime: 15,
+      initialConsultTime: 30,
+      followupConsultTime: 15,
+      settings: [
+        {
+          type: "NEW",
+          slotTime: "30",
+          minNoticeUnit: "8_HOUR"
+        },
+        {
+          type: "FOLLOW_UP",
+          slotTime: "15",
+          minNoticeUnit: "4_HOUR"
+        }
+      ],
+      blockDays: [],
+      daySlots: [
+        {
+          day: "MONDAY",
+          startTime: "09:00:00",
+          endTime: "17:00:00",
+          availabilityMode: "VIRTUAL"
+        },
+        {
+          day: "TUESDAY",
+          startTime: "09:00:00",
+          endTime: "17:00:00",
+          availabilityMode: "VIRTUAL"
+        },
+        {
+          day: "WEDNESDAY",
+          startTime: "09:00:00",
+          endTime: "17:00:00",
+          availabilityMode: "IN_PERSON"
+        },
+        {
+          day: "THURSDAY",
+          startTime: "09:00:00",
+          endTime: "17:00:00",
+          availabilityMode: "VIRTUAL"
+        },
+        {
+          day: "FRIDAY",
+          startTime: "09:00:00",
+          endTime: "17:00:00",
+          availabilityMode: "HYBRID"
+        }
+      ],
+      bookBefore: "3 days",
+      xTENANTID: "stage_aithinkitive"
+    };
+  }
+}
+
+// Patient Factory
+class PatientFactory {
+  static create() {
+    const firstName = faker.person.firstName();
+    const lastName = faker.person.lastName();
+    const birthDate = faker.date.birthdate({ min: 18, max: 80, mode: 'age' });
+    
+    return {
+      phoneNotAvailable: false,
+      emailNotAvailable: false,
+      registrationDate: new Date().toISOString(),
+      firstName: firstName,
+      middleName: faker.person.middleName(),
+      lastName: lastName,
+      timezone: "EST",
+      birthDate: birthDate.toISOString(),
+      gender: faker.helpers.arrayElement(["MALE", "FEMALE"]),
+      ssn: faker.string.numeric(9),
+      mrn: faker.string.alphanumeric(10).toUpperCase(),
+      languages: ["ENGLISH"],
+      avatar: "",
+      mobileNumber: faker.phone.number('###-###-####'),
+      faxNumber: "",
+      homePhone: faker.phone.number('###-###-####'),
+      address: {
+        line1: faker.location.streetAddress(),
+        line2: faker.location.secondaryAddress(),
+        city: faker.location.city(),
+        state: faker.location.state({ abbreviated: true }),
+        country: "USA",
+        zipcode: faker.location.zipCode()
+      },
+      emergencyContacts: [
+        {
+          firstName: faker.person.firstName(),
+          lastName: faker.person.lastName(),
+          mobile: faker.phone.number('###-###-####')
+        }
+      ],
+      patientInsurances: [
+        {
+          active: true,
+          insuranceId: faker.string.alphanumeric(12),
+          copayType: "FIXED",
+          coInsurance: "20",
+          claimNumber: faker.string.alphanumeric(10),
+          note: "Primary insurance",
+          deductibleAmount: "1000",
+          employerName: faker.company.name(),
+          employerAddress: {
+            line1: faker.location.streetAddress(),
+            line2: "",
+            city: faker.location.city(),
+            state: faker.location.state({ abbreviated: true }),
+            country: "USA",
+            zipcode: faker.location.zipCode()
+          },
+          subscriberFirstName: firstName,
+          subscriberLastName: lastName,
+          subscriberMiddleName: "",
+          subscriberSsn: faker.string.numeric(9),
+          subscriberMobileNumber: faker.phone.number('###-###-####'),
+          subscriberAddress: {
+            line1: faker.location.streetAddress(),
+            line2: "",
+            city: faker.location.city(),
+            state: faker.location.state({ abbreviated: true }),
+            country: "USA",
+            zipcode: faker.location.zipCode()
+          },
+          groupId: faker.string.alphanumeric(8),
+          memberId: faker.string.alphanumeric(12),
+          groupName: faker.company.name() + " Insurance Group",
+          frontPhoto: "",
+          backPhoto: "",
+          insuredFirstName: firstName,
+          insuredLastName: lastName,
+          address: {
+            line1: faker.location.streetAddress(),
+            line2: "",
+            city: faker.location.city(),
+            state: faker.location.state({ abbreviated: true }),
+            country: "USA",
+            zipcode: faker.location.zipCode()
+          },
+          insuredBirthDate: birthDate.toISOString().split('T')[0],
+          coPay: "25",
+          insurancePayer: {
+            name: "Blue Cross Blue Shield",
+            payerId: faker.string.alphanumeric(10)
+          }
+        }
+      ],
+      emailConsent: true,
+      messageConsent: true,
+      callConsent: true,
+      patientConsentEntities: [
+        {
+          signedDate: new Date().toISOString()
+        }
+      ]
+    };
+  }
+}
+
+// Appointment Factory
+class AppointmentFactory {
+  static create(providerId, patientId) {
+    // Create appointment for next week, Tuesday at 2 PM
+    const appointmentDate = new Date();
+    appointmentDate.setDate(appointmentDate.getDate() + 7); // Next week
+    appointmentDate.setDay(2); // Tuesday
+    appointmentDate.setHours(14, 0, 0, 0); // 2:00 PM
+    
+    const endTime = new Date(appointmentDate);
+    endTime.setMinutes(30); // 30-minute appointment
+    
+    return {
+      mode: "VIRTUAL",
+      patientId: patientId,
+      customForms: null,
+      visit_type: "CONSULTATION",
+      type: "NEW",
+      paymentType: "INSURANCE",
+      providerId: providerId,
+      startTime: appointmentDate.toISOString(),
+      endTime: endTime.toISOString(),
+      insurance_type: "PRIMARY",
+      note: "Initial consultation for new patient",
+      authorization: faker.string.alphanumeric(10),
+      forms: [faker.string.uuid()],
+      chiefComplaint: faker.helpers.arrayElement([
+        "Annual checkup",
+        "Follow-up visit",
+        "Consultation for symptoms",
+        "Routine examination",
+        "Health screening"
+      ]),
+      isRecurring: false,
+      recurringFrequency: "weekly",
+      reminder_set: true,
+      endType: "never",
+      endDate: new Date().toISOString(),
+      endAfter: 1,
+      customFrequency: 1,
+      customFrequencyUnit: "weeks",
+      selectedWeekdays: [],
+      reminder_before_number: 24,
+      timezone: "EST",
+      duration: 30,
+      xTENANTID: "stage_aithinkitive"
+    };
+  }
+}
+
+// Request Headers Helper
+function createHeaders(authToken) {
+  return {
+    'Accept': 'application/json, text/plain, */*',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Authorization': `Bearer ${authToken}`,
+    'Connection': 'keep-alive',
+    'Content-Type': 'application/json',
+    'Origin': 'https://stage_aithinkitive.uat.provider.ecarehealth.com',
+    'Referer': 'https://stage_aithinkitive.uat.provider.ecarehealth.com/',
+    'Sec-Fetch-Dest': 'empty',
+    'Sec-Fetch-Mode': 'cors',
+    'Sec-Fetch-Site': 'same-site',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',
+    'X-TENANT-ID': 'stage_aithinkitive',
+    'sec-ch-ua': '"Not)A;Brand";v="8", "Chromium";v="138", "Google Chrome";v="138"',
+    'sec-ch-ua-mobile': '?0',
+    'sec-ch-ua-platform': '"Windows"'
+  };
+}
+
+// Main Test Suite
+test.describe('Complete Healthcare Workflow: Login → Provider → Availability → Patient → Appointment', () => {
+  let authToken;
+  let createdEntities = {
+    providers: [],
+    patients: [],
+    appointments: []
+  };
+
+  test.beforeAll(async ({ request }) => {
+    console.log('\n🏥 STARTING COMPLETE HEALTHCARE WORKFLOW TEST');
+    console.log('=' .repeat(60));
+  });
+
+  test.afterAll(async () => {
+    console.log('\n📊 WORKFLOW TEST SUMMARY:');
+    console.log('=' .repeat(60));
+    console.log(`✅ Providers created: ${createdEntities.providers.length}`);
+    console.log(`✅ Patients created: ${createdEntities.patients.length}`);
+    console.log(`✅ Appointments created: ${createdEntities.appointments.length}`);
+    
+    if (createdEntities.providers.length > 0) {
+      console.log('\n👨‍⚕️ PROVIDERS:');
+      createdEntities.providers.forEach((provider, index) => {
+        console.log(`   ${index + 1}. ${provider.firstName} ${provider.lastName} (ID: ${provider.id})`);
+      });
+    }
+    
+    if (createdEntities.patients.length > 0) {
+      console.log('\n🧑‍🦱 PATIENTS:');
+      createdEntities.patients.forEach((patient, index) => {
+        console.log(`   ${index + 1}. ${patient.firstName} ${patient.lastName} (ID: ${patient.id})`);
+      });
+    }
+    
+    if (createdEntities.appointments.length > 0) {
+      console.log('\n📅 APPOINTMENTS:');
+      createdEntities.appointments.forEach((appointment, index) => {
+        console.log(`   ${index + 1}. ${appointment.chiefComplaint} (ID: ${appointment.id})`);
+        console.log(`       📅 ${appointment.startTime} - ${appointment.mode}`);
+      });
+    }
+    
+    console.log('\n🎉 Complete Healthcare Workflow Test Completed Successfully!');
+    console.log('=' .repeat(60));
+  });
+
+  test('COMPLETE WORKFLOW: Login → Provider → Availability → Patient → Appointment', async ({ request }) => {
+    console.log('\n🚀 EXECUTING COMPLETE HEALTHCARE WORKFLOW');
+    console.log('-' .repeat(50));
+
+    // STEP 1: LOGIN / AUTHENTICATION
+    console.log('\n📍 STEP 1: AUTHENTICATION');
+    console.log('-' .repeat(30));
+    
+    try {
+      authToken = await AuthHelper.login(request);
+      console.log('✅ Step 1 Complete: Authentication successful');
+    } catch (error) {
+      console.error('❌ Step 1 Failed: Authentication error');
+      throw error;
+    }
+
+    // STEP 2: CREATE PROVIDER
+    console.log('\n📍 STEP 2: CREATE PROVIDER');
+    console.log('-' .repeat(30));
+    
+    const providerData = ProviderFactory.create();
+    console.log(`   Creating provider: ${providerData.firstName} ${providerData.lastName}`);
+    console.log(`   Email: ${providerData.email}`);
+    console.log(`   Specialty: ${providerData.specialities[0]}`);
+
+    const providerResponse = await request.post('/api/master/provider', {
+      headers: createHeaders(authToken),
+      data: providerData
+    });
+
+    console.log(`   Response Status: ${providerResponse.status()}`);
+    
+    if (providerResponse.status() !== 201) {
+      const errorBody = await providerResponse.text();
+      console.error(`❌ Provider creation failed: ${errorBody}`);
+      throw new Error(`Provider creation failed with status ${providerResponse.status()}`);
+    }
+
+    const createdProvider = await providerResponse.json();
+    createdEntities.providers.push(createdProvider);
+    
+    console.log('✅ Step 2 Complete: Provider created successfully');
+    console.log(`   Provider ID: ${createdProvider.id}`);
+    console.log(`   Name: ${createdProvider.firstName} ${createdProvider.lastName}`);
+
+    // STEP 3: SET PROVIDER AVAILABILITY
+    console.log('\n📍 STEP 3: SET PROVIDER AVAILABILITY');
+    console.log('-' .repeat(30));
+    
+    const availabilityData = AvailabilityFactory.create(createdProvider.id);
+    console.log(`   Setting availability for Provider ID: ${createdProvider.id}`);
+    console.log(`   Business Hours: Monday-Friday, 9 AM - 5 PM`);
+    console.log(`   Booking Window: ${availabilityData.bookingWindow} days`);
+    console.log(`   Timezone: ${availabilityData.timezone}`);
+
+    const availabilityResponse = await request.post('/api/master/provider/availability-setting', {
+      headers: createHeaders(authToken),
+      data: availabilityData
+    });
+
+    console.log(`   Response Status: ${availabilityResponse.status()}`);
+    
+    if (![200, 201].includes(availabilityResponse.status())) {
+      const errorBody = await availabilityResponse.text();
+      console.error(`❌ Availability setting failed: ${errorBody}`);
+      throw new Error(`Availability setting failed with status ${availabilityResponse.status()}`);
+    }
+
+    const availabilityResult = await availabilityResponse.json();
+    
+    console.log('✅ Step 3 Complete: Provider availability set successfully');
+    console.log(`   Available Days: ${availabilityResult.daySlots?.length || 0} days configured`);
+    console.log(`   Settings: ${availabilityResult.settings?.length || 0} appointment types configured`);
+
+    // STEP 4: CREATE PATIENT
+    console.log('\n📍 STEP 4: CREATE PATIENT');
+    console.log('-' .repeat(30));
+    
+    const patientData = PatientFactory.create();
+    console.log(`   Creating patient: ${patientData.firstName} ${patientData.lastName}`);
+    console.log(`   DOB: ${patientData.birthDate.split('T')[0]}`);
+    console.log(`   Gender: ${patientData.gender}`);
+    console.log(`   Phone: ${patientData.mobileNumber}`);
+
+    const patientResponse = await request.post('/api/master/patient', {
+      headers: createHeaders(authToken),
+      data: patientData
+    });
+
+    console.log(`   Response Status: ${patientResponse.status()}`);
+    
+    if (![200, 201].includes(patientResponse.status())) {
+      const errorBody = await patientResponse.text();
+      console.error(`❌ Patient creation failed: ${errorBody}`);
+      throw new Error(`Patient creation failed with status ${patientResponse.status()}`);
+    }
+
+    const createdPatient = await patientResponse.json();
+    createdEntities.patients.push(createdPatient);
+    
+    console.log('✅ Step 4 Complete: Patient created successfully');
+    console.log(`   Patient ID: ${createdPatient.id}`);
+    console.log(`   Name: ${createdPatient.firstName} ${createdPatient.lastName}`);
+
+    // STEP 5: CREATE APPOINTMENT
+    console.log('\n📍 STEP 5: CREATE APPOINTMENT');
+    console.log('-' .repeat(30));
+    
+    const appointmentData = AppointmentFactory.create(createdProvider.id, createdPatient.id);
+    console.log(`   Scheduling appointment between:`);
+    console.log(`   👨‍⚕️ Provider: ${createdProvider.firstName} ${createdProvider.lastName} (${createdProvider.id})`);
+    console.log(`   🧑‍🦱 Patient: ${createdPatient.firstName} ${createdPatient.lastName} (${createdPatient.id})`);
+    console.log(`   📅 Date/Time: ${appointmentData.startTime}`);
+    console.log(`   🏥 Mode: ${appointmentData.mode}`);
+    console.log(`   🩺 Type: ${appointmentData.type}`);
+    console.log(`   💳 Payment: ${appointmentData.paymentType}`);
+    console.log(`   📝 Chief Complaint: ${appointmentData.chiefComplaint}`);
+
+    const appointmentResponse = await request.post('/api/master/appointment', {
+      headers: createHeaders(authToken),
+      data: appointmentData
+    });
+
+    console.log(`   Response Status: ${appointmentResponse.status()}`);
+    
+    if (![200, 201].includes(appointmentResponse.status())) {
+      const errorBody = await appointmentResponse.text();
+      console.error(`❌ Appointment creation failed: ${errorBody}`);
+      throw new Error(`Appointment creation failed with status ${appointmentResponse.status()}`);
+    }
+
+    const createdAppointment = await appointmentResponse.json();
+    createdEntities.appointments.push(createdAppointment);
+    
+    console.log('✅ Step 5 Complete: Appointment created successfully');
+    console.log(`   Appointment ID: ${createdAppointment.id}`);
+    console.log(`   Start Time: ${createdAppointment.startTime}`);
+    console.log(`   Duration: ${createdAppointment.duration} minutes`);
+    console.log(`   Mode: ${createdAppointment.mode}`);
+
+    // FINAL VALIDATION
+    console.log('\n📍 FINAL VALIDATION');
+    console.log('-' .repeat(30));
+    
+    // Validate all relationships
+    expect(createdProvider).toHaveProperty('id');
+    expect(createdProvider.firstName).toBe(providerData.firstName);
+    expect(createdProvider.lastName).toBe(providerData.lastName);
+    expect(createdProvider.email).toBe(providerData.email);
+    
+    expect(availabilityResult).toHaveProperty('providerId');
+    expect(availabilityResult.providerId).toBe(createdProvider.id);
+    
+    expect(createdPatient).toHaveProperty('id');
+    expect(createdPatient.firstName).toBe(patientData.firstName);
+    expect(createdPatient.lastName).toBe(patientData.lastName);
+    
+    expect(createdAppointment).toHaveProperty('id');
+    expect(createdAppointment.providerId).toBe(createdProvider.id);
+    expect(createdAppointment.patientId).toBe(createdPatient.id);
+    expect(createdAppointment.mode).toBe(appointmentData.mode);
+    expect(createdAppointment.type).toBe(appointmentData.type);
+    
+    console.log('✅ All validations passed successfully');
+    
+    console.log('\n🎉 COMPLETE WORKFLOW SUCCESSFUL!');
+    console.log('=' .repeat(50));
+    console.log('📊 WORKFLOW SUMMARY:');
+    console.log(`   🔐 Authentication: ✅ Success`);
+    console.log(`   👨‍⚕️ Provider Created: ✅ ${createdProvider.firstName} ${createdProvider.lastName}`);
+    console.log(`   📅 Availability Set: ✅ ${availabilityResult.daySlots?.length || 0} days configured`);
+    console.log(`   🧑‍🦱 Patient Created: ✅ ${createdPatient.firstName} ${createdPatient.lastName}`);
+    console.log(`   📋 Appointment Scheduled: ✅ ${createdAppointment.startTime}`);
+    console.log('=' .repeat(50));
+  });
+
+  test('WORKFLOW VALIDATION: Verify all entities are properly linked', async ({ request }) => {
+    console.log('\n🔍 RUNNING WORKFLOW VALIDATION TEST');
+    console.log('-' .repeat(40));
+
+    // Skip if no entities were created in previous test
+    if (createdEntities.providers.length === 0) {
+      console.log('⚠️ No entities found from previous test - running independent validation');
+      
+      // Run a quick independent workflow
+      authToken = await AuthHelper.login(request);
+      
+      const provider = await request.post('/api/master/provider', {
+        headers: createHeaders(authToken),
+        data: ProviderFactory.create()
+      });
+      const providerData = await provider.json();
+      
+      const patient = await request.post('/api/master/patient', {
+        headers: createHeaders(authToken),
+        data: PatientFactory.create()
+      });
+      const patientData = await patient.json();
+      
+      createdEntities.providers.push(providerData);
+      createdEntities.patients.push(patientData);
+    }
+
+    // Validate entity relationships
+    const provider = createdEntities.providers[0];
+    const patient = createdEntities.patients[0];
+
+    console.log('📋 Validating Entity Relationships:');
+    console.log(`   Provider ID: ${provider.id}`);
+    console.log(`   Patient ID: ${patient.id}`);
+
+    // Verify provider has required fields
+    expect(provider.id).toBeTruthy();
+    expect(provider.firstName).toBeTruthy();
+    expect(provider.lastName).toBeTruthy();
+    expect(provider.email).toBeTruthy();
+    expect(provider.role).toBe('PROVIDER');
+
+    // Verify patient has required fields
+    expect(patient.id).toBeTruthy();
+    expect(patient.firstName).toBeTruthy();
+    expect(patient.lastName).toBeTruthy();
+    expect(patient.birthDate).toBeTruthy();
+
+    if (createdEntities.appointments.length > 0) {
+      const appointment = createdEntities.appointments[0];
+      console.log(`   Appointment ID: ${appointment.id}`);
+      
+      // Verify appointment relationships
+      expect(appointment.id).toBeTruthy();
+      expect(appointment.providerId).toBe(provider.id);
+      expect(appointment.patientId).toBe(patient.id);
+      expect(appointment.startTime).toBeTruthy();
+      expect(appointment.endTime).toBeTruthy();
+    }
+
+    console.log('✅ All entity relationships validated successfully');
+  });
+
+  test('ERROR HANDLING: Test workflow with invalid data', async ({ request }) => {
+    console.log('\n⚠️ TESTING ERROR HANDLING');
+    console.log('-' .repeat(40));
+
+    authToken = await AuthHelper.login(request);
+
+    // Test 1: Invalid provider data
+    console.log('🧪 Test 1: Invalid provider data');
+    const invalidProviderResponse = await request.post('/api/master/provider', {
+      headers: createHeaders(authToken),
+      data: {
+        // Missing required fields
+        roleType: "PROVIDER",
+        role: "PROVIDER"
+      }
+    });
+
+    console.log(`   Invalid provider response: ${invalidProviderResponse.status()}`);
+    expect([400, 422]).toContain(invalidProviderResponse.status());
+
+    // Test 2: Invalid appointment with non-existent IDs
+    console.log('🧪 Test 2: Invalid appointment data');
+    const invalidAppointmentResponse = await request.post('/api/master/appointment', {
+      headers: createHeaders(authToken),
+      data: {
+        mode: "VIRTUAL",
+        patientId: faker.string.uuid(), // Non-existent patient
+        providerId: faker.string.uuid(), // Non-existent provider
+        type: "NEW",
+        paymentType: "CASH",
+        startTime: new Date().toISOString(),
+        endTime: new Date().toISOString(),
+        chiefComplaint: "test",
+        duration: 30
+      }
+    });
+
+    console.log(`   Invalid appointment response: ${invalidAppointmentResponse.status()}`);
+    expect([400, 404, 422]).toContain(invalidAppointmentResponse.status());
+
+    console.log('✅ Error handling tests completed');
+  });
+});
+
+// Additional test suite for individual component testing
+test.describe('Individual Component Tests', () => {
+  let authToken;
+
+  test.beforeAll(async ({ request }) => {
+    authToken = await AuthHelper.login(request);
+  });
+
+  test('PROVIDER ONLY: Create provider with full data validation', async ({ request }) => {
+    console.log('\n👨‍⚕️ TESTING PROVIDER CREATION');
+    
+    const providerData = ProviderFactory.create();
+    console.log(`Creating provider: ${providerData.firstName} ${providerData.lastName}`);
+
+    const response = await request.post('/api/master/provider', {
+      headers: createHeaders(authToken),
+      data: providerData
+    });
+
+    expect(response.status()).toBe(201);
+    const provider = await response.json();
+    
+    // Comprehensive validation
+    expect(provider.id).toBeTruthy();
+    expect(provider.firstName).toBe(providerData.firstName);
+    expect(provider.lastName).toBe(providerData.lastName);
+    expect(provider.email).toBe(providerData.email);
+    expect(provider.role).toBe('PROVIDER');
+    expect(provider.specialities).toContain(providerData.specialities[0]);
+
+    console.log(`✅ Provider created successfully: ${provider.id}`);
+  });
+
+  test('PATIENT ONLY: Create patient with insurance validation', async ({ request }) => {
+    console.log('\n🧑‍🦱 TESTING PATIENT CREATION');
+    
+    const patientData = PatientFactory.create();
+    console.log(`Creating patient: ${patientData.firstName} ${patientData.lastName}`);
+
+    const response = await request.post('/api/master/patient', {
+      headers: createHeaders(authToken),
+      data: patientData
+    });
+
+    expect([200, 201]).toContain(response.status());
+    const patient = await response.json();
+    
+    // Comprehensive validation
+    expect(patient.id).toBeTruthy();
+    expect(patient.firstName).toBe(patientData.firstName);
+    expect(patient.lastName).toBe(patientData.lastName);
+    expect(patient.birthDate).toBeTruthy();
+    expect(patient.patientInsurances).toHaveLength(1);
+    expect(patient.patientInsurances[0].active).toBe(true);
+
+    console.log(`✅ Patient created successfully: ${patient.id}`);
+  });
+});L i n e   1 1  
+ 
